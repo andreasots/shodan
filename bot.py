@@ -2,6 +2,7 @@ import irc
 import asyncio
 import configparser
 import pyparsing
+import random
 
 pyparsing.ParserElement.enablePackrat()
 
@@ -36,6 +37,7 @@ class Shodan(irc.Bot):
             yield from self.join(channel)
         yield from self.cap_req("twitch.tv/commands")
         yield from self.cap_req("twitch.tv/tags")
+        yield from self.cap_req("echo-message")
     
     def send_ping(self, loop):
         loop.call_later(60, self.send_ping, loop)
@@ -55,6 +57,14 @@ class Shodan(irc.Bot):
             yield from handler(self, tags, source, channel, *data)
         except pyparsing.ParseException as e:
             pass
+    
+    @asyncio.coroutine
+    def on_cap(self, tags, source, params):
+        star, status, cap = params
+        if status == "ACK":
+            print("Request for", repr(cap), "acknowleged")
+        elif status == "NAK":
+            print("Request for", repr(cap), "rejected")
 
     def register_command(self, parser, handler):
         if isinstance(parser, str):
@@ -67,10 +77,49 @@ class Shodan(irc.Bot):
         prefix.addParseAction(lambda *args: [])
         self.commands_parser = prefix + pyparsing.Or([parser for parser, handler in self.commands]) + pyparsing.StringEnd()
 
+static_responses = {
+    "advice": ["Go left.", "No, the other way.", "Flip it turnways.", "Try jumping."],
+    "badadvice": ["Go right.", "Try dying more.", "Have you tried turning it off?", "Take the Master Key."],
+    "bad advice": ["Go right.", "Try dying more.", "Have you tried turning it off?", "Take the Master Key."],
+    "help": "Commands: @advice, @badadvice or @bad advice, @<k>d<n>, @d<n>",
+}
+
+@asyncio.coroutine
+def static_response(bot, tags, source, channel, key):
+    if isinstance(static_responses[key], list):
+        yield from bot.privmsg(channel, random.choice(static_responses[key]))
+    else:
+        yield from bot.privmsg(channel, static_responses[key])
+
+def static_response_parsers():
+    for command in static_responses:
+        command = command.split()
+        parser = pyparsing.Literal(command[0])
+        for token in command[1:]:
+            space = pyparsing.White()
+            space.addParseAction(lambda s, loc, toks: [" "])
+            parser += pyparsing.Literal(token)
+        parser.addParseAction(lambda s, loc, toks: ["".join(toks)])
+        yield parser
+
+static_response_parser = pyparsing.Or(list(static_response_parsers()))
+
+@asyncio.coroutine
+def dice(bot, tags, source, channel, num, d, sides):
+    if num is None:
+        num = 1
+    else:
+        num = int(num)
+    sides = int(sides)
+    result = sum(random.randint(1, sides) for dice in range(num))
+    yield from bot.privmsg(channel, str(result))
+
+dice_parser = pyparsing.Optional(pyparsing.Word(pyparsing.nums), None) + "d" + pyparsing.Word(pyparsing.nums)
+
 loop = asyncio.get_event_loop()
 bot = Shodan()
-bot.register_command("advice", lambda bot, tags, source, channel, *args: bot.privmsg(channel, "Go left."))
-bot.register_command("bad" + pyparsing.Optional(" ") + "advice", lambda bot, tags, source, channel, *args: bot.privmsg(channel, "Go right."))
+bot.register_command(static_response_parser, static_response)
+bot.register_command(dice_parser, dice)
 bot.compile()
 loop.call_later(5, bot.send_ping, loop)
 loop.run_until_complete(bot.run())
