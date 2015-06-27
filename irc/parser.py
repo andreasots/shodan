@@ -25,7 +25,7 @@ ip6addr = pyparsing.Or([
 ])
 hostaddr = pyparsing.Or([ip4addr, ip6addr])
 shortname = pyparsing.Word(pyparsing.alphas + pyparsing.nums, pyparsing.alphas + pyparsing.nums + '-')
-nickname = pyparsing.Word(pyparsing.alphas + "[]\\`_^{|}", pyparsing.alphas + pyparsing.nums + "[]\\`_^{|}" + "-")
+nickname = pyparsing.Word(pyparsing.alphas + pyparsing.nums + "[]\\`_^{|}-")
 hostname = (nickname + pyparsing.ZeroOrMore('.' + shortname)).addParseAction(join)
 servername = hostname
 host = pyparsing.Or([hostname, hostaddr])

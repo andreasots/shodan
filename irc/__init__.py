@@ -1,6 +1,7 @@
 import asyncio
 
 import irc.parser
+import pyparsing
 
 def unescape(value):
     return value.replace("\\:", ";") \
@@ -9,7 +10,7 @@ def unescape(value):
                 .replace("\\r", "\r") \
                 .replace("\\n", "\n")
 
-class Bot:
+class Connection:
     def __init__(self, host, port, loop=None):
         self.host = host
         self.port = port
@@ -29,7 +30,11 @@ class Bot:
                     if not line.endswith(b"\r\n"):
                         continue
                     wait_time = 1
-                    tags, source, command, params = irc.parser.message.parseString(line.decode("utf-8", "replace"))
+                    try:
+                        tags, source, command, params = irc.parser.message.parseString(line.decode("utf-8", "replace"))
+                    except pyparsing.ParseException as e:
+                        print("Parse error while parsing %r: %s" % (line, e))
+                        continue
                     tags = {tag: unescape(value) for tag, value in tags}
                     params = list(params)
                     if "server" in source:
@@ -52,7 +57,6 @@ class Bot:
     
     def disconnect(self):
         self.writer.close()
-        self.writer = None
     
     @asyncio.coroutine
     def signal(self, name, *args, **kwargs):

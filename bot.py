@@ -3,6 +3,7 @@ import asyncio
 import configparser
 import pyparsing
 import random
+import functools
 
 pyparsing.ParserElement.enablePackrat()
 
@@ -16,10 +17,10 @@ def load_config(filename, section="DEFAULT"):
         "pass": config["pass"],
         "nick": config["nick"],
         "channels": list(filter(len, map(str.strip, config["channels"].split(',')))),
-        "cmdprefix": config.get("cmdprefix", "@")
+        "cmdprefix": config.get("cmdprefix", "+")
     }
 
-class Shodan(irc.Bot):
+class Shodan(irc.Connection):
     def __init__(self):
         self.config = load_config("shodan.ini")
         super(Shodan, self).__init__(self.config["host"], self.config["port"])
@@ -33,11 +34,10 @@ class Shodan(irc.Bot):
     def on_connect(self):
         yield from self.password(self.config["pass"])
         yield from self.nick(self.config["nick"])
-        for channel in self.config["channels"]:
-            yield from self.join(channel)
         yield from self.cap_req("twitch.tv/commands")
         yield from self.cap_req("twitch.tv/tags")
-        yield from self.cap_req("echo-message")
+        for channel in self.config["channels"]:
+            yield from self.join(channel)
     
     def send_ping(self, loop):
         loop.call_later(60, self.send_ping, loop)
@@ -57,7 +57,7 @@ class Shodan(irc.Bot):
             yield from handler(self, tags, source, channel, *data)
         except pyparsing.ParseException as e:
             pass
-    
+
     @asyncio.coroutine
     def on_cap(self, tags, source, params):
         star, status, cap = params
@@ -65,6 +65,11 @@ class Shodan(irc.Bot):
             print("Request for", repr(cap), "acknowleged")
         elif status == "NAK":
             print("Request for", repr(cap), "rejected")
+
+    @asyncio.coroutine
+    def on_join(self, tags, source, params):
+        if isinstance(source, tuple) and source[0] == self.config["nick"]:
+            print("Joined", params[0])
 
     def register_command(self, parser, handler):
         if isinstance(parser, str):
@@ -116,10 +121,43 @@ def dice(bot, tags, source, channel, num, d, sides):
 
 dice_parser = pyparsing.Optional(pyparsing.Word(pyparsing.nums), None) + "d" + pyparsing.Word(pyparsing.nums)
 
+class Restrict:
+    def __init__(self, criterion, message = None):
+        self.criterion = criterion
+        self.message = message
+
+    def __call__(self, func):
+        @functools.wraps(func)
+        @asyncio.coroutine
+        def wrapper(bot, tags, source, channel, *args, **kwargs):
+            if self.criterion(bot, tags, source, channel):
+                yield from func(bot, tags, source, channel, *args, **kwargs)
+            else if self.message is not None:
+                name = tags.get("display-name", "")
+                if name == "":
+                    name = source[0]
+                yield from bot.privmsg(channel, "%s: %s" % name, self.message)
+        return wrapper
+
+def is_mod(bot, tags, source, channel):
+    return tags.get("user-type") in {"mod", "global_mod", "admin", "staff"} or source[0] == channel[1:]
+
+def is_sub(bot, tags, source, channel):
+    return tags.get("subscriber", "0") == "1"
+
+mod_only = Restrict(is_mod, "That is a mod-only command.")
+sub_only = Restrict(lambda *args: is_sub(*args) or is_mod(*args), "That is a sub-only command.")
+
+@mod_only
+@asyncio.coroutine
+def test(bot, tags, source, channel, _):
+    yield from bot.privmsg(channel, "Test.")
+
 loop = asyncio.get_event_loop()
 bot = Shodan()
 bot.register_command(static_response_parser, static_response)
 bot.register_command(dice_parser, dice)
+bot.register_command("test", test)
 bot.compile()
 loop.call_later(5, bot.send_ping, loop)
 loop.run_until_complete(bot.run())
