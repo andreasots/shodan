@@ -11,20 +11,22 @@ def unescape(value):
                 .replace("\\n", "\n")
 
 class Connection:
-    def __init__(self, host, port, loop=None):
+    def __init__(self, host, port, handler, loop=None):
         self.host = host
         self.port = port
+
+        self.handler = handler
         
         self.loop = loop or asyncio.get_event_loop()
         self.writer = None
-    
+
     @asyncio.coroutine
     def run(self):
         wait_time = 1
         while True:
             try:
                 reader, self.writer = yield from asyncio.open_connection(self.host, self.port, loop=self.loop)
-                yield from self.signal("connect")
+                yield from self.signal("connect", self)
                 while not reader.at_eof():
                     line = yield from reader.readline()
                     if not line.endswith(b"\r\n"):
@@ -49,7 +51,7 @@ class Connection:
                             source = (source[0], source[1], source[2])
                     else:
                         source = self.host
-                    yield from self.signal(command.lower(), tags, source, params)
+                    yield from self.signal(command.lower(), self, tags, source, params)
             except IOError as e:
                 pass
             yield from asyncio.sleep(wait_time)
@@ -60,7 +62,7 @@ class Connection:
     
     @asyncio.coroutine
     def signal(self, name, *args, **kwargs):
-        callback = getattr(self, "on_" + name, None)
+        callback = getattr(self.handler, "on_" + name, None)
         if callback is not None:
             yield from callback(*args, **kwargs)
     
@@ -99,10 +101,3 @@ class Connection:
     @asyncio.coroutine
     def privmsg(self, target, message):
         yield from self.command_raw("PRIVMSG " + target + " :" + message)
-    
-    #
-    # Default handlers
-    #
-    @asyncio.coroutine
-    def on_ping(self, tags, source, params):
-        yield from self.pong(*params)

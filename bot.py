@@ -17,40 +17,48 @@ def load_config(filename, section="DEFAULT"):
         "pass": config["pass"],
         "nick": config["nick"],
         "channels": list(filter(len, map(str.strip, config["channels"].split(',')))),
-        "cmdprefix": config.get("cmdprefix", "+")
+        "cmdprefix": config.get("cmdprefix", "+"),
+        "chatdepot_host": config.get("chatdepot_host", random.choice(["199.9.253.119", "199.9.253.120"])),
+        "chatdepot_port": int(config.get("chatdepot_port", 6667)),
     }
 
-class Shodan(irc.Connection):
+class Shodan:
     def __init__(self):
         self.config = load_config("shodan.ini")
-        super(Shodan, self).__init__(self.config["host"], self.config["port"])
         
-        self.ping_timer = None
+        self.connection = irc.Connection(self.config["host"], self.config["port"], self)
+        self.whisper = irc.Connection(self.config["chatdepot_host"], self.config["chatdepot_port"], self)
+
+        self.ping_timer = {}
         
         self.commands = []
         self.commands_parser = None
     
     @asyncio.coroutine
-    def on_connect(self):
-        yield from self.password(self.config["pass"])
-        yield from self.nick(self.config["nick"])
-        yield from self.cap_req("twitch.tv/commands")
-        yield from self.cap_req("twitch.tv/tags")
-        for channel in self.config["channels"]:
-            yield from self.join(channel)
+    def on_connect(self, conn):
+        yield from conn.password(self.config["pass"])
+        yield from conn.nick(self.config["nick"])
+        yield from conn.cap_req("twitch.tv/commands")
+        yield from conn.cap_req("twitch.tv/tags")
+
+        if conn == self.connection:
+            for channel in self.config["channels"]:
+                yield from conn.join(channel)
     
     def send_ping(self, loop):
         loop.call_later(60, self.send_ping, loop)
-        asyncio.async(self.ping(self.host), loop=loop)
-        self.ping_timer = loop.call_later(55, self.disconnect)
+        asyncio.async(self.connection.ping(self.config["host"]), loop=loop)
+        asyncio.async(self.whisper.ping(self.config["chatdepot_host"]), loop=loop)
+        self.ping_timer[self.connection] = loop.call_later(55, self.connection.disconnect)
+        self.ping_timer[self.whisper] = loop.call_later(55, self.whisper.disconnect)
     
     @asyncio.coroutine
-    def on_pong(self, tags, source, params):
-        self.ping_timer.cancel()
-        self.ping_timer = None
+    def on_pong(self, conn, tags, source, params):
+        self.ping_timer[conn].cancel()
+        self.ping_timer[conn] = None
     
     @asyncio.coroutine
-    def on_privmsg(self, tags, source, params):
+    def on_privmsg(self, conn, tags, source, params):
         channel, message = params
         try:
             handler, *data = self.commands_parser.parseString(message)
@@ -59,7 +67,7 @@ class Shodan(irc.Connection):
             pass
 
     @asyncio.coroutine
-    def on_cap(self, tags, source, params):
+    def on_cap(self, conn, tags, source, params):
         star, status, cap = params
         if status == "ACK":
             print("Request for", repr(cap), "acknowleged")
@@ -67,7 +75,7 @@ class Shodan(irc.Connection):
             print("Request for", repr(cap), "rejected")
 
     @asyncio.coroutine
-    def on_join(self, tags, source, params):
+    def on_join(self, conn, tags, source, params):
         if isinstance(source, tuple) and source[0] == self.config["nick"]:
             print("Joined", params[0])
 
@@ -76,17 +84,36 @@ class Shodan(irc.Connection):
             parser = pyparsing.Literal(parser)
         parser.addParseAction(lambda s, loc, toks: [handler] + list(toks))
         self.commands.append((parser, handler))
-    
+
     def compile(self):
         prefix = pyparsing.Literal(self.config["cmdprefix"])
         prefix.addParseAction(lambda *args: [])
         self.commands_parser = prefix + pyparsing.Or([parser for parser, handler in self.commands]) + pyparsing.StringEnd()
 
+    @asyncio.coroutine
+    def privmsg(self, target, message):
+        if target.startswith("_WHISPER_"):
+            yield from self.whisper.privmsg("#jtv", "/w %s %s" % (target.split("_")[2], message))
+        else:
+            yield from self.connection.privmsg(target, message)
+
+    @asyncio.coroutine
+    def on_whisper(self, conn, tags, source, params):
+        user, message = params
+        yield from self.on_privmsg(conn, tags, source, ["_WHISPER_" + source[0], message])
+
+    @asyncio.coroutine
+    def on_ping(self, conn, tags, source, params):
+        yield from conn.pong(*params)
+
+    def run(self):
+        return asyncio.gather(self.connection.run(), self.whisper.run())
+
 static_responses = {
     "advice": ["Go left.", "No, the other way.", "Flip it turnways.", "Try jumping."],
     "badadvice": ["Go right.", "Try dying more.", "Have you tried turning it off?", "Take the Master Key."],
     "bad advice": ["Go right.", "Try dying more.", "Have you tried turning it off?", "Take the Master Key."],
-    "help": "Commands: @advice, @badadvice or @bad advice, @<k>d<n>, @d<n>",
+    "help": "Commands: +advice, +badadvice or +bad advice, +<k>d<n>, +d<n>",
 }
 
 @asyncio.coroutine
@@ -132,11 +159,11 @@ class Restrict:
         def wrapper(bot, tags, source, channel, *args, **kwargs):
             if self.criterion(bot, tags, source, channel):
                 yield from func(bot, tags, source, channel, *args, **kwargs)
-            else if self.message is not None:
+            elif self.message is not None:
                 name = tags.get("display-name", "")
                 if name == "":
                     name = source[0]
-                yield from bot.privmsg(channel, "%s: %s" % name, self.message)
+                yield from bot.privmsg(channel, "%s: %s" % (name, self.message))
         return wrapper
 
 def is_mod(bot, tags, source, channel):
