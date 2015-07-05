@@ -9,8 +9,6 @@ def ignore(s, lok, toks):
     "Ignore tokens"
     return []
 
-def join(s, lok, toks):
-    return "".join(toks)
 #
 # Rules
 #
@@ -26,7 +24,7 @@ ip6addr = pyparsing.Or([
 hostaddr = pyparsing.Or([ip4addr, ip6addr])
 shortname = pyparsing.Word(pyparsing.alphas + pyparsing.nums, pyparsing.alphas + pyparsing.nums + '-')
 nickname = pyparsing.Word(pyparsing.alphas + pyparsing.nums + "[]\\`_^{|}-")
-hostname = (nickname + pyparsing.ZeroOrMore('.' + shortname)).addParseAction(join)
+hostname = pyparsing.Combine(nickname + pyparsing.ZeroOrMore('.' + shortname))
 servername = hostname
 host = pyparsing.Or([hostname, hostaddr])
 vendor = host

@@ -51,7 +51,12 @@ class Connection:
                             source = (source[0], source[1], source[2])
                     else:
                         source = self.host
-                    yield from self.signal(command.lower(), self, tags, source, params)
+                    command = command.lower()
+                    if command == "privmsg" and params[1][0] == "\x01" and params[1][-1] == "\x01": # CTCP message
+                        tag, param = params[1][1:-1].split(" ", 1)
+                        yield from self.signal("ctcp_" + tag.lower(), self, tags, source, [params[0], param])
+                    else:
+                        yield from self.signal(command, self, tags, source, params)
             except IOError as e:
                 pass
             yield from asyncio.sleep(wait_time)

@@ -106,6 +106,10 @@ class Shodan:
     def on_ping(self, conn, tags, source, params):
         yield from conn.pong(*params)
 
+    @asyncio.coroutine
+    def on_ctcp_action(self, conn, tags, source, params):
+        yield from self.on_privmsg(conn, tags, source, [params[0], "/me " + params[1]])
+
     def run(self):
         return asyncio.gather(self.connection.run(), self.whisper.run())
 
